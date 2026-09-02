@@ -1,0 +1,6 @@
+{
+  "name": "نقاطي - تطبيق بناء عادات ومهام الأطفال بالتحفيز الإيجابي",
+  "description": "صفحة هبوط تطبيق نقاطي لمساعدة الوالدين على تحفيز أطفالهم لإنجاز المهام اليومية بالنقاط والمكافآت دون ملاحقة أو جدال.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
