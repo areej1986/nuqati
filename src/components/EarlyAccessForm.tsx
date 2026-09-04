@@ -12,35 +12,51 @@ import {
   MessageCircle,
   Copy,
   Check,
-  FileSpreadsheet,
-  ExternalLink,
-  Loader2
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SignupFormData, SignupRecord } from '../types';
-import { getGoogleAccessToken, appendSignupToSheet } from '../services/sheetsService';
+import { saveRegistrationToGoogleSheets } from '../services/sheetsService';
+
+const AGE_CATEGORIES = [
+  '٤–٦ سنوات',
+  '٧–٩ سنوات',
+  '١٠–١٢ سنة',
+  '١٣+ سنة'
+];
 
 export const EarlyAccessForm: React.FC = () => {
   const [formData, setFormData] = useState<SignupFormData>({
     fullName: '',
     contact: '',
-    childAge: '7-9',
-    numberOfChildren: '2',
-    mainChallenge: 'المماطلة وتأجيل الواجبات'
+    mainChallenge: 'المماطلة وتأجيل الواجبات',
+    customChallenge: ''
   });
+  const [selectedAges, setSelectedAges] = useState<string[]>(['٧–٩ سنوات']);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedRecord, setSubmittedRecord] = useState<SignupRecord | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'synced' | 'local_only'>('idle');
+
+  const toggleAgeCategory = (category: string) => {
+    setSelectedAges((prev) =>
+      prev.includes(category)
+        ? prev.filter((c) => c !== category)
+        : [...prev, category]
+    );
+  };
 
   // Check localStorage for existing signup
   useEffect(() => {
     try {
       const saved = localStorage.getItem('noqati_signup');
       if (saved) {
-        setSubmittedRecord(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (parsed?.id || parsed?.contact) {
+          setSubmittedRecord(parsed);
+        }
       }
     } catch {
       // ignore
@@ -51,8 +67,11 @@ export const EarlyAccessForm: React.FC = () => {
     e.preventDefault();
     setErrorMessage('');
 
+    console.log('[Noqati 1/5] تم الضغط على زر التسجيل واستدعاء handleSubmit. البيانات:', formData, 'الفئات العمرية:', selectedAges);
+
     if (!formData.contact.trim()) {
       setErrorMessage('يرجى إدخال رقم الواتساب أو البريد الإلكتروني للتواصل معك عند الإطلاق.');
+      console.warn('[Noqati 1/5] حقل وسيلة التواصل فارغ.');
       return;
     }
 
@@ -62,45 +81,54 @@ export const EarlyAccessForm: React.FC = () => {
 
     if (!isEmail && !isPhone) {
       setErrorMessage('يرجى إدخال رقم هاتف واتساب صحيح أو بريد إلكتروني صالح.');
+      console.warn('[Noqati 1/5] صيغة وسيلة التواصل غير صحيحة:', formData.contact);
+      return;
+    }
+
+    if (selectedAges.length === 0) {
+      setErrorMessage('يرجى اختيار فئة عمرية واحدة على الأقل لأطفالك.');
+      return;
+    }
+
+    if (formData.mainChallenge === 'مشكلة أخرى' && !formData.customChallenge?.trim()) {
+      setErrorMessage('يرجى كتابة المشكلة التي تواجهينها في الخانة المخصصة.');
       return;
     }
 
     setIsSubmitting(true);
-    setSyncStatus('saving');
 
-    const waitlistNum = 864 + Math.floor(Math.random() * 10);
-    let spreadsheetUrl: string | undefined = undefined;
-
-    // Try Google Sheets sync via OAuth
-    try {
-      const token = await getGoogleAccessToken();
-      if (token) {
-        const res = await appendSignupToSheet(formData, waitlistNum, token);
-        spreadsheetUrl = res.spreadsheetUrl;
-        setSyncStatus('synced');
-      }
-    } catch (sheetError) {
-      console.warn('Sheets synchronization note:', sheetError);
-      // Fall back gracefully so the user is never blocked
-      setSyncStatus('local_only');
-    }
-
-    const newRecord: SignupRecord = {
+    const submissionData: SignupFormData = {
       ...formData,
-      id: 'noqati_' + Math.random().toString(36).substring(2, 9),
-      createdAt: new Date().toISOString(),
-      waitlistNumber: waitlistNum,
-      spreadsheetUrl
+      childAge: selectedAges.join('، '),
+      childAges: selectedAges,
     };
 
     try {
-      localStorage.setItem('noqati_signup', JSON.stringify(newRecord));
-    } catch {
-      // ignore
-    }
+      // Write actual registration directly to Google Sheets API
+      const result = await saveRegistrationToGoogleSheets(submissionData);
+      console.log('[Noqati] اكتملت عملية الحفظ بنجاح تام! رابط الجدول:', result.spreadsheetUrl);
 
-    setSubmittedRecord(newRecord);
-    setIsSubmitting(false);
+      const newRecord: SignupRecord = {
+        ...submissionData,
+        id: 'noqati_' + Math.random().toString(36).substring(2, 9),
+        createdAt: new Date().toISOString(),
+        spreadsheetUrl: result.spreadsheetUrl
+      };
+
+      try {
+        localStorage.setItem('noqati_signup', JSON.stringify(newRecord));
+      } catch {
+        // ignore
+      }
+
+      setSubmittedRecord(newRecord);
+    } catch (sheetError: unknown) {
+      console.error('[Noqati خطأ] فشل في Google Sheets أثناء إرسال النموذج:', sheetError);
+      const errMsg = sheetError instanceof Error ? sheetError.message : String(sheetError);
+      setErrorMessage(`تعذر إكمال الحفظ في Google Sheets: ${errMsg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCopyLink = () => {
@@ -150,8 +178,12 @@ export const EarlyAccessForm: React.FC = () => {
                 {/* Form Elements */}
                 <form onSubmit={handleSubmit} className="space-y-6 max-w-xl mx-auto">
                   {errorMessage && (
-                    <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-medium">
-                      {errorMessage}
+                    <div className="p-4 rounded-xl bg-red-50 border-2 border-red-200 text-red-800 text-sm font-medium flex items-start gap-3 text-right">
+                      <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                      <div className="flex-1 leading-relaxed">
+                        <span className="font-bold block mb-0.5">تنبيه في التسجيل:</span>
+                        <span>{errorMessage}</span>
+                      </div>
                     </div>
                   )}
 
@@ -189,31 +221,44 @@ export const EarlyAccessForm: React.FC = () => {
                     />
                   </div>
 
-                  {/* Child Age Group Selector */}
+                  {/* Child Age Group Selector (Multiple Checkboxes) */}
                   <div>
-                    <label className="block text-sm font-bold text-stone-900 mb-2">
-                      الفئة العمرية لأبنائك
-                    </label>
+                    <div className="mb-2">
+                      <label className="block text-sm font-bold text-stone-900">
+                        ما الفئات العمرية لأطفالك؟ <span className="text-red-500">*</span>
+                      </label>
+                      <span className="block text-xs text-stone-500 font-medium mt-0.5">
+                        يمكنك اختيار أكثر من فئة
+                      </span>
+                    </div>
+
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                      {[
-                        { label: '٤ - ٦ سنوات', val: '4-6' },
-                        { label: '٧ - ٩ سنوات', val: '7-9' },
-                        { label: '١٠ - ١٢ سنة', val: '10-12' },
-                        { label: '١٣+ سنة', val: '13+' }
-                      ].map((item) => (
-                        <button
-                          key={item.val}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, childAge: item.val })}
-                          className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                            formData.childAge === item.val
-                              ? 'bg-orange-600 border-orange-600 text-white shadow-xs'
-                              : 'bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100'
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
+                      {AGE_CATEGORIES.map((category) => {
+                        const isChecked = selectedAges.includes(category);
+                        return (
+                          <button
+                            key={category}
+                            type="button"
+                            onClick={() => toggleAgeCategory(category)}
+                            className={`py-3 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                              isChecked
+                                ? 'bg-orange-600 border-orange-600 text-white shadow-xs'
+                                : 'bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100 hover:border-stone-300'
+                            }`}
+                          >
+                            <span
+                              className={`w-4 h-4 rounded-md flex items-center justify-center border transition-colors shrink-0 ${
+                                isChecked
+                                  ? 'bg-white text-orange-600 border-white'
+                                  : 'border-stone-300 bg-white text-transparent'
+                              }`}
+                            >
+                              <Check className="w-3 h-3 stroke-[3]" />
+                            </span>
+                            <span className="truncate">{category}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -233,7 +278,25 @@ export const EarlyAccessForm: React.FC = () => {
                       <option value="كثرة وقت الشاشات">صعوبة سحب الأجهزة اللوحية والشاشات</option>
                       <option value="العناد والجدال المستمر">العناد والجدال عند طلب أي مهمة روتينية</option>
                       <option value="النظافة والنوم المبكر">تأخير النوم وروتين النظافة وتفريش الأسنان</option>
+                      <option value="مشكلة أخرى">مشكلة أخرى</option>
                     </select>
+
+                    {formData.mainChallenge === 'مشكلة أخرى' && (
+                      <div className="mt-3">
+                        <label htmlFor="custom-challenge-input" className="block text-sm font-bold text-stone-900 mb-1.5">
+                          ما المشكلة التي تواجهينها؟ <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="custom-challenge-input"
+                          type="text"
+                          required
+                          value={formData.customChallenge || ''}
+                          onChange={(e) => setFormData({ ...formData, customChallenge: e.target.value })}
+                          placeholder="اكتبي المشكلة باختصار..."
+                          className="w-full px-4 py-3.5 rounded-xl bg-stone-50 border border-stone-300 focus:bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-200 text-stone-900 text-sm font-medium outline-hidden transition-all text-right placeholder:text-stone-400"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Submit Button */}
@@ -244,7 +307,10 @@ export const EarlyAccessForm: React.FC = () => {
                     className="w-full py-4 px-6 rounded-xl bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-bold text-base shadow-md hover:shadow-lg transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
                   >
                     {isSubmitting ? (
-                      <span>جاري حفظ اهتمامك...</span>
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>جاري تسجيل اهتمامك...</span>
+                      </span>
                     ) : (
                       <>
                         <span>انضمي لقائمة الانتظار مجاناً</span>
@@ -274,25 +340,16 @@ export const EarlyAccessForm: React.FC = () => {
                   <CheckCircle2 className="w-9 h-9" />
                 </div>
 
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-900 text-xs font-bold mb-3">
-                  <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-                  <span>تم تأكيد تسجيلك بنجاح!</span>
-                </div>
-
-                <h3 className="text-2xl sm:text-3xl font-extrabold text-stone-900 mb-2 font-heading">
-                  أهلاً بك في عائلة "نقاطي" {submittedRecord.fullName ? `، ${submittedRecord.fullName}` : ''} 🎉
+                <h3 className="text-2xl sm:text-3xl font-extrabold text-stone-900 mb-3 font-heading">
+                  🎉 تم تسجيل اهتمامك بنجاح!
                 </h3>
 
                 <p className="text-stone-600 text-sm sm:text-base leading-relaxed mb-6">
-                  رقمك في قائمة الانتظار هو{' '}
-                  <strong className="text-orange-600 font-extrabold text-lg px-2 py-0.5 bg-orange-50 rounded-md border border-orange-200">
-                    #{submittedRecord.waitlistNumber}
-                  </strong>
-                  . سنرسل لكِ رابط الوصول التجريبي الخاص فور جاهزيته على ({submittedRecord.contact}).
+                  شكرًا لانضمامك إلى نقاطي. سنخبرك فور توفر التطبيق للتجربة.
                 </p>
 
                 {/* VIP Perks Card */}
-                <div className="p-5 rounded-2xl bg-orange-50 border border-orange-200 text-right mb-6">
+                <div className="p-5 rounded-2xl bg-orange-50 border border-orange-200 text-right mb-8">
                   <h4 className="text-sm font-bold text-orange-900 mb-2 flex items-center gap-2">
                     <Gift className="w-4 h-4 text-orange-600" />
                     مزايا العضوية المبكرة المضمونة لك:
@@ -312,30 +369,6 @@ export const EarlyAccessForm: React.FC = () => {
                     </li>
                   </ul>
                 </div>
-
-                {/* Google Sheets Sync Indicator */}
-                {submittedRecord.spreadsheetUrl ? (
-                  <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center justify-between gap-3 mb-8">
-                    <div className="flex items-center gap-2">
-                      <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>تمت مزامنة وحفظ طلبك في جدول Google Sheets الخاص بالتطبيق بنجاح.</span>
-                    </div>
-                    <a
-                      href={submittedRecord.spreadsheetUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 font-bold text-emerald-700 hover:text-emerald-900 underline shrink-0"
-                    >
-                      <span>عرض الجدول</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                ) : (
-                  <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 text-stone-600 text-xs font-medium flex items-center gap-2 mb-8">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>تم حفظ تسجيلك في قائمة الانتظار بنجاح.</span>
-                  </div>
-                )}
 
                 {/* Social Sharing Actions */}
                 <div className="space-y-3">
@@ -358,6 +391,26 @@ export const EarlyAccessForm: React.FC = () => {
                     >
                       {copiedLink ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                       <span>{copiedLink ? 'تم نسخ الرابط!' : 'نسخ رابط الصفحة'}</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-stone-100 text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        localStorage.removeItem('noqati_signup');
+                        setSubmittedRecord(null);
+                        setSelectedAges(['٧–٩ سنوات']);
+                        setFormData({
+                          fullName: '',
+                          contact: '',
+                          mainChallenge: 'المماطلة وتأجيل الواجبات',
+                          customChallenge: ''
+                        });
+                      }}
+                      className="text-xs font-medium text-stone-400 hover:text-stone-700 underline transition-colors cursor-pointer"
+                    >
+                      تسجيل اهتمام لطفل آخر أو برقم جديد
                     </button>
                   </div>
                 </div>

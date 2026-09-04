@@ -1,15 +1,16 @@
 export interface SignupFormData {
   fullName?: string;
   contact: string; // WhatsApp or Email
-  childAge: string;
+  childAge?: string;
+  childAges?: string[];
   numberOfChildren?: string;
   mainChallenge?: string;
+  customChallenge?: string;
 }
 
 export interface SignupRecord extends SignupFormData {
   id: string;
   createdAt: string;
-  waitlistNumber: number;
   spreadsheetUrl?: string;
 }
 
