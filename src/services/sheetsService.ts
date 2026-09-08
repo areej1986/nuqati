@@ -3,11 +3,9 @@ import { supabase } from '../lib/supabase';
 
 export interface SaveRegistrationResult {
   success: boolean;
-  spreadsheetUrl: string;
-  spreadsheetId: string;
 }
 
-export async function saveRegistrationToGoogleSheets(
+export async function saveRegistration(
   formData: SignupFormData
 ): Promise<SaveRegistrationResult> {
   // تجهيز أعمار الأطفال
@@ -31,10 +29,7 @@ export async function saveRegistrationToGoogleSheets(
     : (formData.mainChallenge || '').trim();
 
   // التحقق من البيانات المطلوبة
-  if (!formData.fullName?.trim()) {
-    throw new Error('الاسم مطلوب.');
-  }
-
+  // الاسم اختياري، لذلك لا نتحقق منه هنا
   if (!formData.contact?.trim()) {
     throw new Error('وسيلة التواصل مطلوبة.');
   }
@@ -48,7 +43,7 @@ export async function saveRegistrationToGoogleSheets(
   }
 
   console.log('[Noqati] جاري حفظ التسجيل في Supabase...', {
-    name: formData.fullName,
+    name: formData.fullName || '',
     contact: formData.contact,
     childAges,
     challenge,
@@ -57,7 +52,7 @@ export async function saveRegistrationToGoogleSheets(
   const { error } = await supabase
     .from('registrations')
     .insert({
-      name: formData.fullName.trim(),
+      name: formData.fullName?.trim() || '',
       contact: formData.contact.trim(),
       child_ages: childAges,
       challenge,
@@ -75,7 +70,5 @@ export async function saveRegistrationToGoogleSheets(
 
   return {
     success: true,
-    spreadsheetUrl: '',
-    spreadsheetId: '',
   };
 }
